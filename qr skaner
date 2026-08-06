@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>MIT Davomat Skaner</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif;
+    background: #0F172A;
+    color: #E2E8F0;
+    min-height: 100vh;
+  }
+
+  #startScreen {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    text-align: center;
+  }
+  #startScreen.hidden { display: none; }
+
+  .logo { font-size: 64px; margin-bottom: 12px; }
+  h1 { font-size: 21px; margin: 0 0 6px; font-weight: 600; }
+  .sub { font-size: 14px; color: #94A3B8; margin-bottom: 30px; line-height: 1.5; }
+
+  button {
+    padding: 18px 40px;
+    font-size: 17px;
+    font-weight: 600;
+    border: none;
+    border-radius: 14px;
+    background: #2563EB;
+    color: #fff;
+    cursor: pointer;
+  }
+  button:active { background: #1D4ED8; }
+  button.ghost { background: #334155; padding: 12px 24px; font-size: 15px; }
+
+  #scanScreen { display: none; }
+  #scanScreen.active { display: block; }
+
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 18px;
+    background: #1E293B;
+  }
+  .topbar .title { font-size: 16px; font-weight: 600; }
+  .topbar .clock { font-size: 14px; color: #94A3B8; }
+
+  .body { padding: 16px; }
+
+  #reader {
+    width: 100%;
+    max-width: 460px;
+    margin: 0 auto;
+    border-radius: 14px;
+    overflow: hidden;
+    background: #000;
+  }
+  #reader video, #reader canvas { width: 100% !important; display: block; }
+
+  .hint {
+    text-align: center;
+    color: #94A3B8;
+    font-size: 15px;
+    padding: 18px 10px;
+    line-height: 1.5;
+  }
+
+  #errorBox {
+    display: none;
+    text-align: center;
+    padding: 22px;
+    background: #1E293B;
+    border-radius: 14px;
+    max-width: 460px;
+    margin: 0 auto;
+  }
+  #errorBox.show { display: block; }
+  #errorBox p { color: #CBD5E1; line-height: 1.6; font-size: 15px; margin: 0 0 16px; }
+
+  .counter {
+    text-align: center;
+    font-size: 13px;
+    color: #64748B;
+    padding: 14px 0 24px;
+  }
+
+  #result {
+    position: fixed;
+    inset: 0;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 30px;
+    z-index: 50;
+  }
+  #result.show { display: flex; }
+  #result.ok { background: #14532D; }
+  #result.warn { background: #7C2D12; }
+  #result.error { background: #7F1D1D; }
+  #result.wait { background: #1E3A8A; }
+
+  #rIcon { font-size: 80px; line-height: 1; }
+  #rFio { font-size: 27px; font-weight: 700; margin: 14px 0 6px; color: #fff; }
+  #rTitle { font-size: 19px; color: #fff; }
+  #rMsg { font-size: 16px; color: rgba(255,255,255,.85); margin-top: 10px; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<div id="startScreen">
+  <div class="logo">📷</div>
+  <h1>MIT Davomat Skaner</h1>
+  <div class="sub">Kamerani yoqish uchun tugmani bosing</div>
+  <button onclick="begin()">Skanerni boshlash</button>
+</div>
+
+<div id="scanScreen">
+  <div class="topbar">
+    <span class="title">📷 Skaner</span>
+    <span class="clock" id="clock"></span>
+  </div>
+
+  <div class="body">
+    <div id="reader"></div>
+    <div class="hint" id="hint">Kamera ishga tushmoqda…</div>
+
+    <div id="errorBox">
+      <p id="errorMsg"></p>
+      <button class="ghost" onclick="startScanner()">🔄 Qayta urinish</button>
+    </div>
+
+    <div class="counter" id="counter"></div>
+  </div>
+</div>
+
+<div id="result">
+  <div id="rIcon"></div>
+  <div id="rFio"></div>
+  <div id="rTitle"></div>
+  <div id="rMsg"></div>
+</div>
+
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+<script>
+  /* ============================================================
+     BU YERGA WEB APP URL'INI YOZING (/exec bilan tugaydi)
+     ============================================================ */
+  var API_URL = "https://script.google.com/macros/s/XXXXXXXXXXXX/exec";
+
+  var scanner = null;
+  var busy = false;
+  var lastToken = "";
+  var lastTime = 0;
+  var okCount = 0;
+  var audioCtx = null;
+  var cbIndex = 0;
+
+  /* ---------- Soat ---------- */
+  function tick() {
+    var d = new Date();
+    document.getElementById("clock").textContent =
+      ("0" + d.getHours()).slice(-2) + ":" + ("0" + d.getMinutes()).slice(-2);
+  }
+  setInterval(tick, 10000);
+  tick();
+
+  /* ---------- Boshlash ---------- */
+  function begin() {
+    document.getElementById("startScreen").classList.add("hidden");
+    document.getElementById("scanScreen").classList.add("active");
+    unlockAudio();
+    startScanner();
+  }
+
+  /* ---------- Kamera ---------- */
+  function startScanner() {
+
+    if (typeof Html5Qrcode === "undefined") {
+      showError("QR kutubxonasi yuklanmadi. Internetni tekshiring.");
+      return;
+    }
+
+    document.getElementById("errorBox").classList.remove("show");
+    document.getElementById("reader").style.display = "block";
+    setHint("Kamera ishga tushmoqda…");
+
+    if (scanner) {
+      try { scanner.stop(); } catch (e) {}
+      scanner = null;
+    }
+
+    scanner = new Html5Qrcode("reader");
+
+    scanner.start(
+      { facingMode: "environment" },
+      { fps: 10, qrbox: { width: 250, height: 250 } },
+      onScan,
+      function () {}
+    ).then(function () {
+      setHint("Bejikni kameraga tuting…");
+    }).catch(function (err) {
+      showError("Kamera ochilmadi: " + err);
+    });
+  }
+
+  function setHint(t) { document.getElementById("hint").textContent = t; }
+
+  function showError(msg) {
+    document.getElementById("reader").style.display = "none";
+    setHint("");
+    document.getElementById("errorMsg").textContent = msg;
+    document.getElementById("errorBox").classList.add("show");
+  }
+
+  /* ---------- Skanerlash ---------- */
+  function onScan(text) {
+
+    var now = Date.now();
+
+    if (busy) return;
+    if (text === lastToken && now - lastTime < 6000) return;
+
+    lastToken = text;
+    lastTime = now;
+    busy = true;
+
+    pauseCamera();
+    beep();
+
+    showResult({ type: "wait", title: "Yuborilmoqda…", message: "", fio: "" }, true);
+
+    sendToServer(text);
+  }
+
+  /* ---------- Serverga yuborish (JSONP) ---------- */
+  function sendToServer(token) {
+
+    cbIndex++;
+    var cbName = "qrcb" + cbIndex;
+    var done = false;
+
+    window[cbName] = function (data) {
+      done = true;
+      cleanup();
+      showResult(data);
+    };
+
+    var s = document.createElement("script");
+
+    s.src = API_URL +
+      "?t=" + encodeURIComponent(token) +
+      "&callback=" + cbName +
+      "&_=" + Date.now();
+
+    s.onerror = function () {
+      if (done) return;
+      done = true;
+      cleanup();
+      showResult({
+        type: "error",
+        title: "Serverga ulanmadi",
+        message: "Internet yoki havolani tekshiring.",
+        fio: ""
+      });
+    };
+
+    function cleanup() {
+      try { delete window[cbName]; } catch (e) { window[cbName] = undefined; }
+      if (s.parentNode) s.parentNode.removeChild(s);
+    }
+
+    setTimeout(function () {
+      if (done) return;
+      done = true;
+      cleanup();
+      showResult({
+        type: "error",
+        title: "Javob kelmadi",
+        message: "Server javob bermadi, qayta urinib ko'ring.",
+        fio: ""
+      });
+    }, 20000);
+
+    document.body.appendChild(s);
+  }
+
+  function pauseCamera() {
+    try {
+      if (scanner && scanner.getState && scanner.getState() === 2) scanner.pause(true);
+    } catch (e) {}
+  }
+
+  function resumeCamera() {
+    try {
+      if (scanner && scanner.getState && scanner.getState() === 3) scanner.resume();
+    } catch (e) {}
+  }
+
+  /* ---------- Natija ---------- */
+  function showResult(r, keepBusy) {
+
+    if (!r || !r.type) {
+      r = { type: "error", title: "Noma'lum javob", message: "", fio: "" };
+    }
+
+    var icons = { ok: "✅", warn: "⚠️", error: "❌", wait: "⏳" };
+    var box = document.getElementById("result");
+
+    box.className = "show " + r.type;
+
+    document.getElementById("rIcon").textContent = icons[r.type] || "❌";
+    document.getElementById("rFio").textContent = r.fio || "";
+    document.getElementById("rTitle").textContent = r.title || "";
+    document.getElementById("rMsg").textContent = r.message || "";
+
+    if (keepBusy) return;
+
+    if (r.type === "ok") {
+      okCount++;
+      document.getElementById("counter").textContent = "Bugun qayd etildi: " + okCount;
+    }
+
+    setTimeout(function () {
+      box.className = "";
+      busy = false;
+      resumeCamera();
+    }, r.type === "ok" ? 2500 : 4000);
+  }
+
+  /* ---------- Ovoz ---------- */
+  function unlockAudio() {
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === "suspended") audioCtx.resume();
+    } catch (e) {}
+  }
+
+  function beep() {
+    try {
+      if (!audioCtx) unlockAudio();
+      if (audioCtx.state === "suspended") audioCtx.resume();
+
+      var osc = audioCtx.createOscillator();
+      var gain = audioCtx.createGain();
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.frequency.value = 880;
+      gain.gain.value = 0.2;
+      osc.start();
+      setTimeout(function () { try { osc.stop(); } catch (e) {} }, 120);
+    } catch (e) {}
+  }
+</script>
+</body>
+</html>
